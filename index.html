@@ -1,1 +1,524 @@
 
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>TKX Bike Racing 2D</title>
+<style>
+*{box-sizing:border-box}
+html,body{
+ margin:0;width:100%;height:100%;overflow:hidden;
+ background:#183b28;font-family:Arial,sans-serif;touch-action:none
+}
+canvas{display:block;width:100%;height:100%}
+#hud{
+ position:fixed;top:12px;left:12px;right:12px;
+ display:flex;justify-content:space-between;gap:8px;
+ z-index:2;color:white;font-weight:bold;
+ text-shadow:0 2px 4px #000
+}
+.pill{
+ background:#071b18cc;border:1px solid #ffffff44;
+ border-radius:12px;padding:8px 12px;font-size:14px
+}
+#controls{
+ position:fixed;left:0;right:0;bottom:18px;
+ display:flex;justify-content:space-between;
+ align-items:end;padding:0 20px;z-index:3;
+ pointer-events:none
+}
+.control-group{display:flex;gap:12px;pointer-events:auto}
+.control{
+ width:66px;height:66px;border:2px solid #ffffffaa;
+ border-radius:18px;background:#071b18bb;color:white;
+ font-size:27px;font-weight:bold;touch-action:none;
+ user-select:none
+}
+.control:active{background:#16a085}
+.nitro{
+ width:72px;height:58px;font-size:14px;
+ background:#075c9dcc
+}
+.overlay{
+ position:fixed;inset:0;display:flex;
+ align-items:center;justify-content:center;
+ background:#071b18bb;z-index:5;padding:20px
+}
+.panel{
+ width:min(92vw,390px);
+ background:linear-gradient(160deg,#163d36,#10232e);
+ border:1px solid #ffffff55;border-radius:22px;
+ padding:26px 22px;text-align:center;color:white;
+ box-shadow:0 16px 45px #0008
+}
+.panel h1{font-size:27px;margin:0 0 8px;color:#ffe36e}
+.panel p{line-height:1.5;color:#e5f4ee;font-size:14px}
+.mainbtn{
+ border:0;border-radius:14px;background:#ffd447;
+ color:#1a2923;font-size:18px;font-weight:800;
+ padding:14px 28px;margin-top:12px;width:100%
+}
+.hidden{display:none!important}
+.note{font-size:11px!important;color:#bcd2cb!important}
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="hud">
+ <div class="pill">🏍️ TKX RACING</div>
+ <div class="pill">अंक: <span id="score">0</span></div>
+ <div class="pill">⚡ <span id="speed">1x</span></div>
+</div>
+
+<div id="controls">
+ <div class="control-group">
+  <button class="control" id="left">◀</button>
+  <button class="control" id="right">▶</button>
+ </div>
+ <button class="control nitro" id="nitro">NITRO</button>
+</div>
+
+<div class="overlay" id="startScreen">
+ <div class="panel">
+  <h1>TKX BIKE RACING 2D</h1>
+  <p>हाईवे पर बाइक चलाएँ, दूसरी गाड़ियों से बचें और ज्यादा से ज्यादा अंक बनाएँ!</p>
+  <p>बाएँ और दाएँ बटन से बाइक मोड़ें। नाइट्रो दबाकर तेज चलें।</p>
+  <button class="mainbtn" id="startBtn">गेम शुरू करें</button>
+  <p class="note">मोबाइल और कंप्यूटर दोनों के लिए</p>
+ </div>
+</div>
+
+<div class="overlay hidden" id="gameOver">
+ <div class="panel">
+  <h1>रेस खत्म!</h1>
+  <p>आपका स्कोर: <strong id="finalScore">0</strong></p>
+  <button class="mainbtn" id="restartBtn">फिर से खेलें</button>
+ </div>
+</div>
+
+<script>
+(()=>{
+'use strict';
+
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+
+const scoreEl=document.getElementById('score');
+const speedEl=document.getElementById('speed');
+const startScreen=document.getElementById('startScreen');
+const gameOverScreen=document.getElementById('gameOver');
+const finalScore=document.getElementById('finalScore');
+
+let W=0,H=0,dpr=1,roadW=0,roadX=0,laneW=0;
+let running=false,score=0,roadOffset=0;
+let spawnTimer=0,lastTime=0,nitroTime=0;
+
+let player,traffic=[];
+
+const keys={
+ left:false,
+ right:false,
+ nitro:false
+};
+
+function resize(){
+ W=window.innerWidth;
+ H=window.innerHeight;
+ dpr=Math.min(window.devicePixelRatio||1,2);
+
+ canvas.width=Math.round(W*dpr);
+ canvas.height=Math.round(H*dpr);
+
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+
+ roadW=Math.min(W*0.78,460);
+ roadX=(W-roadW)/2;
+ laneW=roadW/3;
+
+ if(player){
+  player.x=Math.max(
+   roadX+22,
+   Math.min(roadX+roadW-22,player.x)
+  );
+  player.y=H*0.78;
+ }
+}
+
+window.addEventListener('resize',resize);
+
+function resetGame(){
+ score=0;
+ roadOffset=0;
+ spawnTimer=0.7;
+ nitroTime=0;
+ traffic=[];
+
+ player={
+  x:W/2,
+  y:H*0.78,
+  w:30,
+  h:58,
+  speed:330
+ };
+
+ scoreEl.textContent='0';
+ speedEl.textContent='1x';
+
+ keys.left=false;
+ keys.right=false;
+ keys.nitro=false;
+}
+
+function roundedRect(x,y,w,h,r,color){
+ ctx.fillStyle=color;
+ ctx.beginPath();
+ ctx.roundRect(x,y,w,h,r);
+ ctx.fill();
+}
+
+function drawBackground(){
+
+ // हरी घास
+ ctx.fillStyle='#367d42';
+ ctx.fillRect(0,0,W,H);
+
+ // घास के पैटर्न
+ for(let y=-40;y<H+50;y+=65){
+  const yy=(y+roadOffset*0.45)%65;
+
+  ctx.fillStyle='#4a9650';
+  ctx.fillRect(roadX-30,yy,12,28);
+  ctx.fillRect(roadX+roadW+18,yy,12,28);
+ }
+
+ // सड़क के किनारे
+ ctx.fillStyle='#d7d5cb';
+ ctx.fillRect(roadX-9,0,roadW+18,H);
+
+ // मुख्य सड़क
+ ctx.fillStyle='#34383d';
+ ctx.fillRect(roadX,0,roadW,H);
+
+ // सड़क की सफेद किनारी
+ ctx.fillStyle='#f7f0d1';
+ ctx.fillRect(roadX+5,0,4,H);
+ ctx.fillRect(roadX+roadW-9,0,4,H);
+
+ // तीन लेन की लाइन
+ ctx.strokeStyle='#f7f0d1';
+ ctx.lineWidth=4;
+ ctx.setLineDash([30,28]);
+ ctx.lineDashOffset=-roadOffset;
+
+ for(let i=1;i<=2;i++){
+  ctx.beginPath();
+  ctx.moveTo(roadX+laneW*i,0);
+  ctx.lineTo(roadX+laneW*i,H);
+  ctx.stroke();
+ }
+
+ ctx.setLineDash([]);
+}
+
+// बाइक बनाना
+function drawBike(x,y){
+
+ ctx.save();
+ ctx.translate(x,y);
+
+ // परछाई
+ ctx.fillStyle='#0006';
+ ctx.beginPath();
+ ctx.ellipse(2,7,19,31,0,0,Math.PI*2);
+ ctx.fill();
+
+ // पहिए
+ roundedRect(-7,-29,14,19,6,'#111820');
+ roundedRect(-7,13,14,20,6,'#111820');
+
+ // बाइक का शरीर
+ ctx.fillStyle='#e53935';
+ ctx.beginPath();
+ ctx.moveTo(0,-27);
+ ctx.lineTo(13,-8);
+ ctx.lineTo(10,18);
+ ctx.lineTo(0,27);
+ ctx.lineTo(-10,18);
+ ctx.lineTo(-13,-8);
+ ctx.closePath();
+ ctx.fill();
+
+ // पीला हिस्सा
+ roundedRect(-9,-12,18,19,6,'#ffca28');
+
+ // सीट
+ roundedRect(-8,-25,16,9,5,'#202a35');
+
+ // हेडलाइट
+ ctx.fillStyle='#fff7c2';
+ ctx.beginPath();
+ ctx.ellipse(0,-25,4,3,0,0,Math.PI*2);
+ ctx.fill();
+
+ // हैंडल
+ ctx.strokeStyle='#cbd5df';
+ ctx.lineWidth=3;
+ ctx.beginPath();
+ ctx.moveTo(-14,-18);
+ ctx.lineTo(14,-18);
+ ctx.stroke();
+
+ ctx.restore();
+}
+
+// दूसरी गाड़ियाँ
+function drawCar(car){
+
+ ctx.save();
+ ctx.translate(car.x,car.y);
+
+ // पहिए
+ roundedRect(-car.w/2-3,-car.h/2+8,7,17,3,'#101417');
+ roundedRect(car.w/2-4,-car.h/2+8,7,17,3,'#101417');
+ roundedRect(-car.w/2-3,car.h/2-25,7,17,3,'#101417');
+ roundedRect(car.w/2-4,car.h/2-25,7,17,3,'#101417');
+
+ // गाड़ी
+ roundedRect(
+  -car.w/2,-car.h/2,
+  car.w,car.h,10,car.color
+ );
+
+ // शीशा
+ roundedRect(
+  -car.w/2+5,-car.h/2+10,
+  car.w-10,car.h*0.28,6,'#9bd5e8'
+ );
+
+ // पीछे का शीशा
+ roundedRect(
+  -car.w/2+5,car.h/2-22,
+  car.w-10,12,4,'#263746'
+ );
+
+ // लाइट
+ ctx.fillStyle='#fff2b0';
+ ctx.fillRect(-car.w/2+4,car.h/2-5,7,4);
+ ctx.fillRect(car.w/2-11,car.h/2-5,7,4);
+
+ ctx.restore();
+}
+
+// नई गाड़ी लाना
+function spawnCar(){
+
+ const lane=Math.floor(Math.random()*3);
+
+ const colors=[
+  '#2878d0',
+  '#f5a623',
+  '#8e55bd',
+  '#e8e8e8',
+  '#26a69a'
+ ];
+
+ traffic.push({
+  x:roadX+laneW*(lane+0.5),
+  y:-90,
+  w:38,
+  h:68,
+  speed:180+Math.random()*85,
+  color:colors[Math.floor(Math.random()*colors.length)]
+ });
+}
+
+// टक्कर की जाँच
+function hit(a,b){
+ return Math.abs(a.x-b.x)<(a.w+b.w)*0.38 &&
+        Math.abs(a.y-b.y)<(a.h+b.h)*0.38;
+}
+
+// गेम खत्म
+function endGame(){
+ running=false;
+ finalScore.textContent=Math.floor(score);
+ gameOverScreen.classList.remove('hidden');
+}
+
+// गेम का हिसाब
+function update(dt){
+
+ if(keys.nitro && nitroTime<=0){
+  nitroTime=1.8;
+ }
+
+ if(nitroTime>0){
+  nitroTime=Math.max(0,nitroTime-dt);
+ }
+
+ const boost=nitroTime>0?1.65:1;
+
+ speedEl.textContent=boost>1?'2x':'1x';
+
+ const steer=(keys.right?1:0)-(keys.left?1:0);
+
+ player.x+=steer*player.speed*dt;
+
+ player.x=Math.max(
+  roadX+22,
+  Math.min(roadX+roadW-22,player.x)
+ );
+
+ const roadSpeed=300*boost;
+
+ roadOffset=(roadOffset+roadSpeed*dt)%58;
+
+ score+=dt*10*boost;
+ scoreEl.textContent=Math.floor(score);
+
+ spawnTimer-=dt;
+
+ if(spawnTimer<=0){
+  spawnCar();
+  spawnTimer=Math.max(0.48,1.05-score/1600)+(Math.random()*0.35);
+ }
+
+ for(let i=traffic.length-1;i>=0;i--){
+
+  const car=traffic[i];
+
+  car.y+=(roadSpeed-car.speed)*dt;
+
+  if(hit(player,car)){
+   endGame();
+   return;
+  }
+
+  if(car.y>H+100){
+   traffic.splice(i,1);
+  }
+ }
+}
+
+// स्क्रीन पर गेम दिखाना
+function draw(){
+
+ drawBackground();
+
+ for(const car of traffic){
+  drawCar(car);
+ }
+
+ if(player){
+  drawBike(player.x,player.y);
+ }
+
+ if(nitroTime>0){
+  ctx.fillStyle='#7deaff22';
+  ctx.fillRect(0,0,W,H);
+ }
+}
+
+// गेम चलाना
+function loop(time){
+
+ const dt=Math.min((time-lastTime)/1000||0,0.035);
+ lastTime=time;
+
+ if(running){
+  update(dt);
+ }
+
+ draw();
+
+ requestAnimationFrame(loop);
+}
+
+// गेम शुरू करना
+function start(){
+
+ resetGame();
+ running=true;
+ lastTime=performance.now();
+
+ startScreen.classList.add('hidden');
+ gameOverScreen.classList.add('hidden');
+}
+
+document.getElementById('startBtn')
+ .addEventListener('click',start);
+
+document.getElementById('restartBtn')
+ .addEventListener('click',start);
+
+// मोबाइल बटन
+function bindHold(id,key){
+
+ const el=document.getElementById(id);
+
+ el.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  keys[key]=true;
+  el.setPointerCapture(e.pointerId);
+ });
+
+ const release=e=>{
+  e.preventDefault();
+  keys[key]=false;
+ };
+
+ el.addEventListener('pointerup',release);
+ el.addEventListener('pointercancel',release);
+
+ el.addEventListener('lostpointercapture',()=>{
+  keys[key]=false;
+ });
+}
+
+bindHold('left','left');
+bindHold('right','right');
+bindHold('nitro','nitro');
+
+// कंप्यूटर के बटन
+window.addEventListener('keydown',e=>{
+
+ if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a'){
+  keys.left=true;
+ }
+
+ if(e.key==='ArrowRight'||e.key.toLowerCase()==='d'){
+  keys.right=true;
+ }
+
+ if(e.key===' '||e.key.toLowerCase()==='n'){
+  keys.nitro=true;
+ }
+});
+
+window.addEventListener('keyup',e=>{
+
+ if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a'){
+  keys.left=false;
+ }
+
+ if(e.key==='ArrowRight'||e.key.toLowerCase()==='d'){
+  keys.right=false;
+ }
+
+ if(e.key===' '||e.key.toLowerCase()==='n'){
+  keys.nitro=false;
+ }
+});
+
+resize();
+resetGame();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+  </html>
+
